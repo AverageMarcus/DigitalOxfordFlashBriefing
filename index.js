@@ -6,26 +6,53 @@ const moment = require('moment');
 const PORT = process.env.PORT || 4000;
 const API_KEY = process.env.API_KEY;
 
-const groupURL = 'https://cdn.rawgit.com/jsoxford/hubot/f15a1386/meetup-groups.json';
-let groups = [];
+const CACHE = {};
 
-app.get('/feed', async (req, res) => {
-  const url = `https://api.meetup.com/2/events?&sign=true&photo-host=public&group_id=${groups.join(',')}&status=upcoming&time=1d,1w&page=20&key=${API_KEY}`;
+const fetchAndCache = async (groupId) => {
+  const url = `https://api.meetup.com/2/events?&sign=true&photo-host=public&group_id=${groupId}&status=upcoming&time=0d,1w&page=20&key=${API_KEY}`;
   const response = await r2(url).response;
-  const events = (await response.json()).results.map(event => {
+  const events = await response.json();
+  CACHE[groupId] = {
+    events: events,
+    expires: moment().add(1, 'day')
+  };
+  return events;
+};
+
+const getEvents = async (groupId) => {
+  const cachedResponse = CACHE[groupId];
+  let events;
+  if (cachedResponse && moment().isBefore(cachedResponse.expires)) {
+    events = cachedResponse.events;
+  } else {
+    events = await fetchAndCache(groupId);
+  }
+
+  return formatEvents(events);
+};
+
+const formatEvents = (events) => {
+  return events.results.map(event => {
+    let text = '';
+    if (event.name.indexOf(event.group.name) !== 0) {
+      text += `${event.group.name} presents `;
+    }
+    text += `${event.name} on ${moment(event.time).format('dddd, MMMM Do [at] h:mm a')}`;
     return {
       uid: event.created,
       updateDate: moment().utc().format(),
       titleText: event.group.name,
-      mainText: `${event.group.name} - ${event.name} - ${moment(event.time).format('dddd, MMMM Do, h:mm:ss a')}`
+      mainText: text,
+      redirectionURL: event.event_url
     }
   });
+}
+
+app.get('/feed/:groupId', async (req, res) => {
+  const events = await getEvents(req.params.groupId);
   return res.json(events);
 });
 
 app.listen(PORT, async () => {
-  const response = await r2(groupURL).response;
-  groups = await response.json();
-  groups = Object.keys(groups).filter(id => !groups[id].outOfOxford);
   console.log(`Server listening on http://localhost:${PORT}`);
 });
